@@ -23,28 +23,37 @@ export function AuthProvider({ children }) {
     async function register(email, password, name, role) {
         const result = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(result.user, { displayName: name });
-        await setDoc(doc(db, 'users', result.user.uid), {
+        const profileData = {
             name,
             email,
             role,
             createdAt: new Date().toISOString(),
-        });
+        };
+        await setDoc(doc(db, 'users', result.user.uid), profileData);
+        setUserProfile(profileData);
         return result;
     }
 
     async function login(email, password) {
-        return signInWithEmailAndPassword(auth, email, password);
+        const result = await signInWithEmailAndPassword(auth, email, password);
+        await fetchUserProfile(result.user.uid);
+        return result;
     }
 
     async function logout() {
+        setUserProfile(null);
         return signOut(auth);
     }
 
     async function fetchUserProfile(uid) {
-        const docRef = doc(db, 'users', uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-            setUserProfile(docSnap.data());
+        try {
+            const docRef = doc(db, 'users', uid);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                setUserProfile(docSnap.data());
+            }
+        } catch (error) {
+            console.error('Error fetching profile:', error);
         }
     }
 

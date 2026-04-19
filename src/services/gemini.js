@@ -4,7 +4,7 @@ const genAI = new GoogleGenerativeAI(process.env.REACT_APP_GEMINI_API_KEY);
 
 export async function scorePriority(need) {
     try {
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
         const prompt = `
 You are an AI assistant helping NGOs prioritize community needs.
 Analyze this community need and return a JSON response only.
@@ -38,7 +38,7 @@ Return ONLY this JSON (no extra text):
 
 export async function matchVolunteers(need, volunteers) {
     try {
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
         const volunteerList = volunteers
             .map(
                 (v, i) =>
