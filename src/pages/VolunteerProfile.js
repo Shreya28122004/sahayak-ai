@@ -69,7 +69,7 @@ export default function VolunteerProfile() {
                 role: 'volunteer',
                 updatedAt: new Date().toISOString(),
             });
-            setSuccess('✅ Profile saved successfully! NGOs can now find and match you to needs.');
+            setSuccess('Profile saved! NGOs can now find and match you to needs.');
         } catch (err) {
             setError('Failed to save profile. Please try again.');
         }
@@ -91,7 +91,7 @@ export default function VolunteerProfile() {
         <div className="page">
             <Navbar />
             <div className="container" style={{ maxWidth: 700 }}>
-                <div className="page-title">🙋 Volunteer Profile</div>
+                <div className="page-title">Volunteer Profile</div>
                 <p className="page-subtitle">
                     Set up your profile so NGO coordinators can match you to community needs.
                 </p>
@@ -99,4 +99,124 @@ export default function VolunteerProfile() {
                 {error && <div className="alert alert-error">{error}</div>}
                 {success && <div className="alert alert-success">{success}</div>}
 
-                <div className="card"></div>
+                <div className="card">
+                    <form onSubmit={handleSave}>
+
+                        <div className="form-group">
+                            <label>Full Name</label>
+                            <input
+                                value={form.name}
+                                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                                placeholder="Your full name"
+                                required
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label>Phone Number</label>
+                            <input
+                                value={form.phone}
+                                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                                placeholder="e.g. +91 98765 43210"
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label>Your Location</label>
+                            <input
+                                value={form.location}
+                                onChange={(e) => setForm({ ...form, location: e.target.value })}
+                                placeholder="e.g. Koramangala, Bengaluru"
+                                required
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label>Availability</label>
+                            <select
+                                value={form.availability}
+                                onChange={(e) => setForm({ ...form, availability: e.target.value })}
+                            >
+                                <option value="weekends">Weekends Only</option>
+                                <option value="weekdays">Weekdays Only</option>
+                                <option value="full-time">Full Time</option>
+                                <option value="on-call">On Call Emergency</option>
+                                <option value="flexible">Flexible</option>
+                            </select>
+                        </div>
+
+                        <div className="form-group">
+                            <label>Your Skills (select all that apply)</label>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                                {SKILLS_LIST.map((skill) => (
+                                    <button
+                                        key={skill}
+                                        type="button"
+                                        onClick={() => toggleSkill(skill)}
+                                        style={{
+                                            padding: '6px 14px',
+                                            borderRadius: '20px',
+                                            border: '1.5px solid',
+                                            borderColor: form.skills.includes(skill) ? '#1a56db' : '#d1d5db',
+                                            background: form.skills.includes(skill) ? '#eff6ff' : 'white',
+                                            color: form.skills.includes(skill) ? '#1a56db' : '#374151',
+                                            fontSize: '0.85rem',
+                                            cursor: 'pointer',
+                                            fontWeight: form.skills.includes(skill) ? '600' : '400',
+                                        }}
+                                    >
+                                        {form.skills.includes(skill) ? 'check ' : ''}{skill}
+                                    </button>
+                                ))}
+                            </div>
+                            {form.skills.length > 0 && (
+                                <p style={{ marginTop: 8, fontSize: '0.85rem', color: '#1a56db' }}>
+                                    {form.skills.length} skill selected
+                                </p>
+                            )}
+                        </div>
+
+                        <div className="form-group">
+                            <label>Bio (optional)</label>
+                            <textarea
+                                value={form.bio}
+                                onChange={(e) => setForm({ ...form, bio: e.target.value })}
+                                placeholder="Tell NGOs about yourself and your experience..."
+                                rows={3}
+                            />
+                        </div>
+
+                        <button
+                            type="submit"
+                            className="btn btn-success"
+                            style={{ width: '100%', justifyContent: 'center', padding: '14px' }}
+                            disabled={loading}
+                        >
+                            {loading ? 'Saving...' : 'Save Volunteer Profile'}
+                        </button>
+
+                    </form>
+                </div>
+
+                {form.skills.length > 0 && (
+                    <div className="card" style={{ marginTop: 16 }}>
+                        <h3 style={{ marginBottom: 12 }}>Profile Preview</h3>
+                        <p><strong>{form.name}</strong></p>
+                        <p style={{ color: '#6b7280', fontSize: '0.9rem' }}>
+                            Location: {form.location}
+                        </p>
+                        <p style={{ color: '#6b7280', fontSize: '0.9rem' }}>
+                            Availability: {form.availability}
+                        </p>
+                        <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            {form.skills.map((skill) => (
+                                <span key={skill} className="badge badge-medium">{skill}</span>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+            </div>
+        </div>
+    );
+}

@@ -1,27 +1,42 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
+// Initialize the API with your friend's key
 const genAI = new GoogleGenerativeAI(process.env.REACT_APP_GEMINI_API_KEY);
+
+// These safety settings are the ones that just worked in your CMD
+const safetySettings = [
+    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+];
 
 export async function scorePriority(need) {
     try {
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+        // Use the EXACT model name from your successful CMD test
+        const model = genAI.getGenerativeModel({
+            model: 'gemini-3.1-flash-lite-preview',
+            safetySettings
+        });
+
         const prompt = `
-You are an AI assistant helping NGOs prioritize community needs.
-Analyze this community need and return a JSON response only.
+            You are an AI assistant helping NGOs prioritize community needs.
+            Analyze this community need and return a JSON response only.
 
-Need Title: ${need.title}
-Description: ${need.description}
-Category: ${need.category}
-Location: ${need.location}
-People Affected: ${need.peopleAffected}
+            Need Title: ${need.title}
+            Description: ${need.description}
+            Category: ${need.category}
+            Location: ${need.location}
+            People Affected: ${need.peopleAffected}
 
-Return ONLY this JSON (no extra text):
-{
-  "score": <number from 1-10>,
-  "urgency": "<Critical|High|Medium|Low>",
-  "explanation": "<2-3 sentences explaining why this need has this priority score>"
-}
-    `;
+            Return ONLY this JSON (no extra text):
+            {
+              "score": <number from 1-10>,
+              "urgency": "<Critical|High|Medium|Low>",
+              "explanation": "<2-3 sentences explaining why this need has this priority score>"
+            }
+        `;
+
         const result = await model.generateContent(prompt);
         const text = result.response.text();
         const clean = text.replace(/```json|```/g, '').trim();
@@ -31,45 +46,40 @@ Return ONLY this JSON (no extra text):
         return {
             score: 5,
             urgency: 'Medium',
-            explanation: 'Automated scoring unavailable. Manual review needed.',
+            explanation: 'Error: ' + error.message,
         };
     }
 }
 
 export async function matchVolunteers(need, volunteers) {
     try {
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+        const model = genAI.getGenerativeModel({
+            model: 'gemini-3.1-flash-lite-preview',
+            safetySettings
+        });
+
         const volunteerList = volunteers
-            .map(
-                (v, i) =>
-                    `${i + 1}. Name: ${v.name}, Skills: ${v.skills?.join(', ')}, Location: ${v.location}, Availability: ${v.availability}`
-            )
+            .map((v, i) => `${i + 1}. Name: ${v.name}, Skills: ${v.skills?.join(', ')}, Location: ${v.location}`)
             .join('\n');
 
         const prompt = `
-You are an AI assistant helping match volunteers to community needs.
+            Match volunteers to this NGO need.
+            Need: ${need.title}
+            Volunteers:
+            ${volunteerList}
 
-Community Need:
-Title: ${need.title}
-Description: ${need.description}
-Category: ${need.category}
-Location: ${need.location}
+            Return ONLY this JSON:
+            {
+              "matches": [
+                {
+                  "volunteerIndex": <index>,
+                  "matchScore": <1-10>,
+                  "reason": "<reason>"
+                }
+              ]
+            }
+        `;
 
-Available Volunteers:
-${volunteerList}
-
-Return ONLY this JSON (no extra text):
-{
-  "matches": [
-    {
-      "volunteerIndex": <0-based index>,
-      "matchScore": <1-10>,
-      "reason": "<1-2 sentences why this volunteer is a good match>"
-    }
-  ]
-}
-Return top 3 matches only, sorted by matchScore descending.
-    `;
         const result = await model.generateContent(prompt);
         const text = result.response.text();
         const clean = text.replace(/```json|```/g, '').trim();
