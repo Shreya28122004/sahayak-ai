@@ -57,7 +57,8 @@ export default function NeedDetail() {
             const result = await matchVolunteers(need, freshVolunteers);
             const matchesWithData = result.matches
                 .map((m) => {
-                    const volunteer = freshVolunteers[m.volunteerIndex] || freshVolunteers[0];
+                    // ✅ FIX: subtract 1 because prompt numbers from 1, array starts from 0
+                    const volunteer = freshVolunteers[m.volunteerIndex - 1] || freshVolunteers[0];
                     return {
                         ...m,
                         volunteer: volunteer || null,
@@ -86,7 +87,7 @@ export default function NeedDetail() {
                 assignedVolunteerName: volunteerName,
                 status: 'assigned',
             }));
-            setSuccess(volunteerName + ' has been assigned to this need!');
+            setSuccess('✅ ' + volunteerName + ' has been assigned to this need!');
         } catch (err) {
             console.error(err);
         }
@@ -100,11 +101,12 @@ export default function NeedDetail() {
                 completedAt: new Date().toISOString(),
             });
             setNeed((n) => ({ ...n, status: 'completed' }));
-            setSuccess('Need marked as completed! Impact tracked. ✅');
+            setSuccess('✅ Need marked as completed! Impact has been tracked.');
         } catch (err) {
             console.error(err);
         }
     }
+
     async function handleReject() {
         try {
             await updateDoc(doc(db, 'needs', id), {
@@ -113,7 +115,7 @@ export default function NeedDetail() {
                 completedByVolunteer: false,
             });
             setNeed((n) => ({ ...n, status: 'assigned', completedByVolunteer: false }));
-            setSuccess('Task sent back to volunteer for re-completion.');
+            setSuccess('⚠️ Task sent back to volunteer for re-completion.');
         } catch (err) {
             console.error(err);
         }
@@ -184,10 +186,16 @@ export default function NeedDetail() {
                                 </span>
                                 <span style={{
                                     fontSize: '0.85rem', padding: '4px 8px', borderRadius: '12px',
-                                    background: need.status === 'completed' ? '#dcfce7' : need.status === 'assigned' ? '#dbeafe' : '#fef3c7',
-                                    color: need.status === 'completed' ? '#166534' : need.status === 'assigned' ? '#1d4ed8' : '#92400e'
+                                    background: need.status === 'completed' ? '#dcfce7' :
+                                        need.status === 'pending_review' ? '#fef3c7' :
+                                            need.status === 'assigned' ? '#dbeafe' : '#fef3c7',
+                                    color: need.status === 'completed' ? '#166534' :
+                                        need.status === 'pending_review' ? '#92400e' :
+                                            need.status === 'assigned' ? '#1d4ed8' : '#92400e'
                                 }}>
-                                    {need.status === 'completed' ? '✅ Completed' : need.status === 'assigned' ? '🔄 Assigned' : '🔓 Open'}
+                                    {need.status === 'completed' ? '✅ Completed' :
+                                        need.status === 'pending_review' ? '⏳ Pending Review' :
+                                            need.status === 'assigned' ? '🔄 Assigned' : '🔓 Open'}
                                 </span>
                             </div>
                             <p style={{ color: '#4b5563', lineHeight: 1.7 }}>{need.description}</p>
@@ -225,7 +233,7 @@ export default function NeedDetail() {
                         {need.createdAt ? new Date(need.createdAt).toLocaleDateString() : ''}
                     </p>
 
-                    {/* Mark Complete Button */}
+                    {/* Approve / Reject Buttons */}
                     {userProfile?.role === 'ngo' && need.status === 'pending_review' && (
                         <div style={{
                             background: '#fef3c7',
@@ -289,9 +297,7 @@ export default function NeedDetail() {
                         {/* Match Results */}
                         {matches.length > 0 && (
                             <div style={{ marginTop: 20 }}>
-                                <h4 style={{ marginBottom: 12 }}>
-                                    Top Volunteer Matches:
-                                </h4>
+                                <h4 style={{ marginBottom: 12 }}>Top Volunteer Matches:</h4>
                                 {matches.map((match, index) => (
                                     <div
                                         key={index}

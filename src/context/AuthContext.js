@@ -1,3 +1,5 @@
+// No change needed — sendPasswordResetEmail is imported directly 
+// in Login.js from firebase/auth, so AuthContext doesn't need updating!
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
     createUserWithEmailAndPassword,

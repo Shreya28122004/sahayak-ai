@@ -57,10 +57,13 @@ export default function VolunteerProfile() {
         e.preventDefault();
         setError('');
         setSuccess('');
+
         if (!form.name || !form.location || form.skills.length === 0) {
             return setError('Please fill in name, location and select at least one skill.');
         }
+
         setLoading(true);
+
         try {
             await setDoc(doc(db, 'volunteers', currentUser.uid), {
                 ...form,
@@ -69,11 +72,13 @@ export default function VolunteerProfile() {
                 role: 'volunteer',
                 updatedAt: new Date().toISOString(),
             });
-            setSuccess('Profile saved! NGOs can now find and match you to needs.');
+            setSuccess('✅ Profile saved! NGOs can now find and match you to needs.');
         } catch (err) {
-            setError('Failed to save profile. Please try again.');
+            console.error(err);
+            setError('❌ Failed to save profile. Please try again.');
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
     }
 
     if (fetching) {
@@ -165,13 +170,15 @@ export default function VolunteerProfile() {
                                             fontWeight: form.skills.includes(skill) ? '600' : '400',
                                         }}
                                     >
-                                        {form.skills.includes(skill) ? 'check ' : ''}{skill}
+                                        {/* ✅ FIX: Use ✓ checkmark instead of the word "check" */}
+                                        {form.skills.includes(skill) ? '✓ ' : ''}{skill}
                                     </button>
                                 ))}
                             </div>
+                            {/* ✅ FIX: Correct plural/singular skills count */}
                             {form.skills.length > 0 && (
                                 <p style={{ marginTop: 8, fontSize: '0.85rem', color: '#1a56db' }}>
-                                    {form.skills.length} skill selected
+                                    {form.skills.length} skill{form.skills.length !== 1 ? 's' : ''} selected
                                 </p>
                             )}
                         </div>
@@ -189,10 +196,22 @@ export default function VolunteerProfile() {
                         <button
                             type="submit"
                             className="btn btn-success"
-                            style={{ width: '100%', justifyContent: 'center', padding: '14px' }}
+                            style={{
+                                width: '100%',
+                                justifyContent: 'center',
+                                padding: '14px',
+                                opacity: loading ? 0.7 : 1,
+                                cursor: loading ? 'not-allowed' : 'pointer'
+                            }}
                             disabled={loading}
                         >
-                            {loading ? 'Saving...' : 'Save Volunteer Profile'}
+                            {loading ? (
+                                <><span className="spinner"></span> Saving Profile...</>
+                            ) : success ? (
+                                '✅ Profile Saved!'
+                            ) : (
+                                '💾 Save Volunteer Profile'
+                            )}
                         </button>
 
                     </form>
@@ -200,13 +219,13 @@ export default function VolunteerProfile() {
 
                 {form.skills.length > 0 && (
                     <div className="card" style={{ marginTop: 16 }}>
-                        <h3 style={{ marginBottom: 12 }}>Profile Preview</h3>
+                        <h3 style={{ marginBottom: 12 }}>👤 Profile Preview</h3>
                         <p><strong>{form.name}</strong></p>
                         <p style={{ color: '#6b7280', fontSize: '0.9rem' }}>
-                            Location: {form.location}
+                            📍 Location: {form.location}
                         </p>
                         <p style={{ color: '#6b7280', fontSize: '0.9rem' }}>
-                            Availability: {form.availability}
+                            🕐 Availability: {form.availability}
                         </p>
                         <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                             {form.skills.map((skill) => (

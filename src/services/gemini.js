@@ -1,9 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// Initialize the API with your friend's key
 const genAI = new GoogleGenerativeAI(process.env.REACT_APP_GEMINI_API_KEY);
 
-// These safety settings are the ones that just worked in your CMD
 const safetySettings = [
     { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
     { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -13,7 +11,6 @@ const safetySettings = [
 
 export async function scorePriority(need) {
     try {
-        // Use the EXACT model name from your successful CMD test
         const model = genAI.getGenerativeModel({
             model: 'gemini-3.1-flash-lite-preview',
             safetySettings
@@ -46,7 +43,7 @@ export async function scorePriority(need) {
         return {
             score: 5,
             urgency: 'Medium',
-            explanation: 'Error: ' + error.message,
+            explanation: 'AI scoring temporarily unavailable. Default score assigned.',
         };
     }
 }
@@ -72,7 +69,7 @@ export async function matchVolunteers(need, volunteers) {
             {
               "matches": [
                 {
-                  "volunteerIndex": <index>,
+                  "volunteerIndex": <index starting from 1>,
                   "matchScore": <1-10>,
                   "reason": "<reason>"
                 }
