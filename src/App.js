@@ -33,6 +33,10 @@ function App() {
             element={<PrivateRoute><SubmitNeed /></PrivateRoute>}
           />
           <Route
+            path="/edit-need/:id"
+            element={<PrivateRoute><SubmitNeed /></PrivateRoute>}
+          />
+          <Route
             path="/volunteer-profile"
             element={<PrivateRoute><VolunteerProfile /></PrivateRoute>}
           />
