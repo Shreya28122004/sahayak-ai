@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { collection, onSnapshot, orderBy, query, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, orderBy, query, doc, getDoc, updateDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
 import { Link } from 'react-router-dom';
@@ -31,8 +31,17 @@ export default function Dashboard() {
     const [myAssignedNeeds, setMyAssignedNeeds] = useState([]);
     const [volunteerProfile, setVolunteerProfile] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState('all');
+
+    // ✅ CHANGED: filters is now an array for multi-select
+    const [filters, setFilters] = useState([]);
+
     const [reviewSuccess, setReviewSuccess] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
+
+    // ✅ NEW: Proof of completion notes + photos — keyed by need.id
+    const [completionNotes, setCompletionNotes] = useState({});
+    const [completionPhotos, setCompletionPhotos] = useState({}); // stores base64 strings
+    const [submittingIds, setSubmittingIds] = useState([]);
 
     useEffect(() => {
         const q = query(
@@ -76,29 +85,117 @@ export default function Dashboard() {
         fetchVolunteerProfile();
     }, [currentUser, userProfile]);
 
-    async function handleVolunteerComplete(needId) {
-        try {
-            await updateDoc(doc(db, 'needs', needId), {
-                status: 'pending_review',
-                volunteerCompletedAt: new Date().toISOString(),
-                completedByVolunteer: true,
-            });
-            // ✅ FIX: Show success message after submit for review
-            setReviewSuccess('✅ Submitted! Waiting for NGO approval.');
-            setTimeout(() => setReviewSuccess(''), 4000);
-        } catch (err) {
-            console.error('Error submitting for review:', err);
+    // ✅ CHANGED: toggle a filter in/out of the array
+    function toggleFilter(f) {
+        setFilters((prev) =>
+            prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]
+        );
+    }
+    // Replacement for Line 20: NGO Multi-select remains the same
+    function toggleFilter(f) {
+        setFilters((prev) =>
+            prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]
+        );
+    }
+
+    // NEW: Exclusive toggle for Community View (One at a time)
+    function toggleCommunityFilter(f) {
+        setFilters((prev) => {
+            if (prev.includes(f)) return []; // Toggle off if clicked again
+            return [f]; // Only allow one active filter
+        });
+    }
+
+    // NEW: Delete Function
+    async function handleDeleteNeed(id) {
+        if (window.confirm("Are you sure you want to delete this need?")) {
+            try {
+                await deleteDoc(doc(db, 'needs', id));
+            } catch (err) {
+                console.error("Error deleting need:", err);
+            }
         }
     }
 
-    // ✅ FIX: Added pending_review case
+
+    function clearFilters() {
+        setFilters([]);
+    }
+    // Line 22: Add your function here
+    async function uploadToCloudinary(file) {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('upload_preset', 'sahayak_preset');
+        formData.append('cloud_name', 'dypkq2hkv');
+
+        const response = await fetch(`https://api.cloudinary.com/v1_1/dypkq2hkv/image/upload`, {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) throw new Error('Upload failed');
+        const data = await response.json();
+        return data.secure_url;
+    }
+
+    // ✅ NEW: Submit for review with completion note
+    async function handleVolunteerComplete(need) {
+        const note = completionNotes[need.id] || '';
+        if (!note.trim()) return; // button is disabled anyway, but safety check
+
+        setSubmittingIds((prev) => [...prev, need.id]);
+        try {
+            await updateDoc(doc(db, 'needs', need.id), {
+                status: 'pending_review',
+                volunteerCompletedAt: new Date().toISOString(),
+                completedByVolunteer: true,
+                completionNote: note.trim(),
+                completionPhoto: completionPhotos[need.id] || '',
+            });
+
+            // ✅ Write notification to NGO if ngoId is on the need
+            if (need.ngoId) {
+                await addDoc(collection(db, 'notifications'), {
+                    toUserId: need.ngoId,
+                    title: '⏳ Pending Review',
+                    message: `${userProfile?.name || 'A volunteer'} has submitted "${need.title}" for your review.`,
+                    needId: need.id,
+                    read: false,
+                    createdAt: new Date().toISOString(),
+                });
+            }
+
+            setReviewSuccess('✅ Submitted! Waiting for NGO approval.');
+            setTimeout(() => setReviewSuccess(''), 4000);
+            // Clear the note and photo for this need
+            setCompletionNotes((prev) => { const next = { ...prev }; delete next[need.id]; return next; });
+            setCompletionPhotos((prev) => { const next = { ...prev }; delete next[need.id]; return next; });
+        } catch (err) {
+            console.error('Error submitting for review:', err);
+        }
+        setSubmittingIds((prev) => prev.filter((x) => x !== need.id));
+    }
+
+    // ✅ CHANGED: filter by multiple selected filters (OR logic)
     const filteredNeeds = needs.filter((need) => {
-        if (filter === 'all') return true;
-        if (filter === 'open') return need.status === 'open';
-        if (filter === 'assigned') return need.status === 'assigned';
-        if (filter === 'pending_review') return need.status === 'pending_review';
-        if (filter === 'completed') return need.status === 'completed';
-        return need.aiUrgency?.toLowerCase() === filter;
+        const matchesFilter = (() => {
+            if (filters.length === 0) return true; // nothing selected = show all
+            return filters.some((f) => {
+                if (f === 'open') return need.status === 'open';
+                if (f === 'assigned') return need.status === 'assigned';
+                if (f === 'pending_review') return need.status === 'pending_review';
+                if (f === 'completed') return need.status === 'completed';
+                return need.aiUrgency?.toLowerCase() === f;
+            });
+        })();
+
+        const q = searchQuery.toLowerCase();
+        const matchesSearch = q === '' ||
+            need.title?.toLowerCase().includes(q) ||
+            need.description?.toLowerCase().includes(q) ||
+            need.location?.toLowerCase().includes(q);
+
+        return matchesFilter && matchesSearch;
     });
 
     const stats = {
@@ -108,12 +205,23 @@ export default function Dashboard() {
         open: needs.filter((n) => n.status === 'open').length,
         assigned: needs.filter((n) => n.status === 'assigned').length,
         completed: needs.filter((n) => n.status === 'completed').length,
+        pendingReview: needs.filter((n) => n.status === 'pending_review').length,
         peopleHelped: needs
             .filter((n) => n.status === 'completed')
             .reduce((sum, n) => sum + (n.peopleAffected || 0), 0),
-        totalPeopleAffected: needs
-            .reduce((sum, n) => sum + (n.peopleAffected || 0), 0),
     };
+
+    // ✅ Filter button config for NGO
+    const filterButtons = [
+        { key: 'critical', label: '🔴 Critical' },
+        { key: 'high', label: '🟡 High' },
+        { key: 'medium', label: '🔵 Medium' },
+        { key: 'low', label: '🟢 Low' },
+        { key: 'open', label: '🔓 Open' },
+        { key: 'assigned', label: '🔄 Assigned' },
+        { key: 'pending_review', label: '⏳ Pending Review' },
+        { key: 'completed', label: '✅ Completed' },
+    ];
 
     return (
         <div className="page">
@@ -180,7 +288,6 @@ export default function Dashboard() {
                             </div>
                         )}
 
-                        {/* ✅ FIX: Success message after Submit for Review */}
                         {reviewSuccess && (
                             <div className="alert alert-success" style={{ marginBottom: 16 }}>
                                 {reviewSuccess}
@@ -221,10 +328,13 @@ export default function Dashboard() {
                                                 </span>
                                                 <span style={{
                                                     fontSize: '0.8rem', padding: '4px 8px', borderRadius: '12px',
-                                                    background: need.status === 'completed' ? '#dcfce7' : '#dbeafe',
-                                                    color: need.status === 'completed' ? '#166534' : '#1d4ed8'
+                                                    background: need.status === 'completed' ? '#dcfce7' :
+                                                        need.status === 'pending_review' ? '#fef3c7' : '#dbeafe',
+                                                    color: need.status === 'completed' ? '#166534' :
+                                                        need.status === 'pending_review' ? '#92400e' : '#1d4ed8'
                                                 }}>
-                                                    {need.status === 'completed' ? '✅ Completed' : '🔄 In Progress'}
+                                                    {need.status === 'completed' ? '✅ Completed' :
+                                                        need.status === 'pending_review' ? '⏳ Awaiting Review' : '🔄 In Progress'}
                                                 </span>
                                             </div>
                                             <p style={{ color: '#4b5563', fontSize: '0.9rem' }}>
@@ -236,7 +346,128 @@ export default function Dashboard() {
                                                     <p>{need.aiExplanation}</p>
                                                 </div>
                                             )}
+
+                                            {/* ✅ NEW: Proof of completion text area — only show when status is assigned */}
+                                            {/* ✅ Wrap both the Note and the Photo inside the same conditional block */}
+                                            {need.status === 'assigned' && (
+                                                <>
+                                                    <div style={{ marginTop: 12 }}>
+                                                        <label style={{ fontSize: '0.85rem', fontWeight: '600', color: '#374151', display: 'block', marginBottom: 6 }}>
+                                                            📝 Completion Note <span style={{ color: '#ef4444' }}>*</span>
+                                                        </label>
+                                                        <textarea
+                                                            rows={3}
+                                                            placeholder="Describe what you did, how many people helped, any notes for the NGO..."
+                                                            value={completionNotes[need.id] || ''}
+                                                            onChange={(e) =>
+                                                                setCompletionNotes((prev) => ({ ...prev, [need.id]: e.target.value }))
+                                                            }
+                                                            style={{
+                                                                width: '100%',
+                                                                padding: '10px 12px',
+                                                                fontSize: '0.88rem',
+                                                                border: '1.5px solid #d1d5db',
+                                                                borderRadius: '8px',
+                                                                resize: 'vertical',
+                                                                outline: 'none',
+                                                                boxSizing: 'border-box',
+                                                                fontFamily: 'inherit',
+                                                                color: '#374151',
+                                                            }}
+                                                            onFocus={(e) => e.target.style.borderColor = '#1a56db'}
+                                                            onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                                                        />
+                                                        <p style={{ fontSize: '0.78rem', color: '#9ca3af', marginTop: 4 }}>
+                                                            Required before submitting for review
+                                                        </p>
+                                                    </div>
+
+                                                    {/* ✅ The photo upload is now safely inside the conditional block */}
+                                                    <div style={{ marginTop: 12 }}>
+                                                        <label style={{ fontSize: '0.85rem', fontWeight: '600', color: '#374151', display: 'block', marginBottom: 6 }}>
+                                                            📸 Proof Photo <span style={{ fontSize: '0.78rem', color: '#9ca3af', fontWeight: '400' }}>(optional)</span>
+                                                        </label>
+                                                        <input
+                                                            type="file"
+                                                            accept="image/*"
+                                                            capture="environment"
+                                                            id={`photo-${need.id}`}
+                                                            style={{ display: 'none' }}
+                                                            onChange={async (e) => {
+                                                                const file = e.target.files[0];
+                                                                if (!file) return;
+                                                                try {
+                                                                    const imageUrl = await uploadToCloudinary(file);
+                                                                    setCompletionPhotos((prev) => ({ ...prev, [need.id]: imageUrl }));
+                                                                } catch (err) {
+                                                                    console.error('Upload failed', err);
+                                                                }
+                                                            }}
+                                                        />
+                                                        {completionPhotos[need.id] ? (
+                                                            <div style={{ position: 'relative', display: 'inline-block' }}>
+                                                                <img
+                                                                    src={completionPhotos[need.id]}
+                                                                    alt="Proof"
+                                                                    style={{ width: '100%', maxWidth: 280, borderRadius: 8, border: '1.5px solid #d1d5db', display: 'block' }}
+                                                                />
+                                                                <button
+                                                                    onClick={() => setCompletionPhotos((prev) => { const next = { ...prev }; delete next[need.id]; return next; })}
+                                                                    style={{
+                                                                        position: 'absolute', top: 6, right: 6,
+                                                                        background: 'rgba(0,0,0,0.6)', color: 'white',
+                                                                        border: 'none', borderRadius: '50%',
+                                                                        width: 24, height: 24, cursor: 'pointer',
+                                                                        fontSize: '0.8rem', display: 'flex',
+                                                                        alignItems: 'center', justifyContent: 'center',
+                                                                    }}
+                                                                    title="Remove photo"
+                                                                >✕</button>
+                                                            </div>
+                                                        ) : (
+                                                            <label
+                                                                htmlFor={`photo-${need.id}`}
+                                                                style={{
+                                                                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                                                                    padding: '8px 16px', borderRadius: 8, cursor: 'pointer',
+                                                                    border: '1.5px dashed #d1d5db', color: '#6b7280',
+                                                                    fontSize: '0.85rem', background: '#f9fafb',
+                                                                    transition: 'border-color 0.15s',
+                                                                }}
+                                                                onMouseEnter={(e) => e.currentTarget.style.borderColor = '#1a56db'}
+                                                                onMouseLeave={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
+                                                            >
+                                                                📷 Upload or take photo
+                                                            </label>
+                                                        )}
+                                                    </div>
+                                                </>
+                                            )}
+
+                                            {/* Show saved completion note + photo if pending_review */}
+                                            {need.status === 'pending_review' && need.completionNote && (
+                                                <div style={{
+                                                    marginTop: 12,
+                                                    background: '#fef3c7',
+                                                    border: '1px solid #fcd34d',
+                                                    borderRadius: 8,
+                                                    padding: '10px 12px',
+                                                }}>
+                                                    <div style={{ fontSize: '0.8rem', fontWeight: '600', color: '#92400e', marginBottom: 4 }}>
+                                                        📝 Your submitted note:
+                                                    </div>
+                                                    <p style={{ fontSize: '0.85rem', color: '#78350f' }}>{need.completionNote}</p>
+                                                    {need.completionPhoto && (
+                                                        <img
+                                                            src={need.completionPhoto}
+                                                            alt="Your proof photo"
+                                                            style={{ marginTop: 8, width: '100%', maxWidth: 240, borderRadius: 6, border: '1px solid #fcd34d' }}
+                                                        />
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
+
                                         <div style={{ textAlign: 'center', minWidth: 100 }}>
                                             <div style={{
                                                 fontSize: '1.5rem', fontWeight: '800',
@@ -250,15 +481,27 @@ export default function Dashboard() {
                                                 {need.status === 'completed' ? 'Completed' :
                                                     need.status === 'pending_review' ? 'Awaiting NGO Approval' : 'In Progress'}
                                             </div>
+
+                                            {/* ✅ CHANGED: button disabled until note is typed */}
                                             {need.status === 'assigned' && (
                                                 <button
-                                                    onClick={() => handleVolunteerComplete(need.id)}
+                                                    onClick={() => handleVolunteerComplete(need)}
                                                     className="btn btn-success"
                                                     style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+                                                    disabled={
+                                                        submittingIds.includes(need.id) ||
+                                                        !(completionNotes[need.id]?.trim())
+                                                    }
+                                                    title={!(completionNotes[need.id]?.trim()) ? 'Please write a completion note first' : ''}
                                                 >
-                                                    📋 Submit for Review
+                                                    {submittingIds.includes(need.id) ? (
+                                                        <><span className="spinner"></span> Submitting...</>
+                                                    ) : (
+                                                        '📋 Submit for Review'
+                                                    )}
                                                 </button>
                                             )}
+
                                             {need.status === 'pending_review' && (
                                                 <div style={{
                                                     fontSize: '0.75rem',
@@ -280,7 +523,6 @@ export default function Dashboard() {
                 )}
 
                 {/* ===== COMMUNITY MEMBER VIEW ===== */}
-                {/* ===== COMMUNITY MEMBER VIEW ===== */}
                 {userProfile?.role === 'community' && (
                     <div>
                         {(() => {
@@ -298,11 +540,26 @@ export default function Dashboard() {
                                             <div className="stat-number">{myNeeds.length}</div>
                                             <div className="stat-label">📋 My Submissions</div>
                                         </div>
-                                        <div className="stat-card">
+                                        <div
+                                            className="stat-card"
+                                            onClick={() => toggleCommunityFilter('assigned')}
+                                            style={{
+                                                cursor: 'pointer',
+                                                border: filters.includes('assigned') ? '2px solid #3b82f6' : '1px solid transparent'
+                                            }}
+                                        >
                                             <div className="stat-number" style={{ color: '#3b82f6' }}>{myInProgress}</div>
                                             <div className="stat-label">🔄 In Progress</div>
                                         </div>
-                                        <div className="stat-card">
+
+                                        <div
+                                            className="stat-card"
+                                            onClick={() => toggleCommunityFilter('completed')}
+                                            style={{
+                                                cursor: 'pointer',
+                                                border: filters.includes('completed') ? '2px solid #16a34a' : '1px solid transparent'
+                                            }}
+                                        >
                                             <div className="stat-number" style={{ color: '#16a34a' }}>{myResolved}</div>
                                             <div className="stat-label">✅ Resolved</div>
                                         </div>
@@ -354,7 +611,12 @@ export default function Dashboard() {
                                             </Link>
                                         </div>
                                     ) : (
-                                        myNeeds.map((need) => (
+                                        myNeeds.filter(n => {
+                                            if (filters.length === 0) return true;
+                                            if (filters.includes('assigned')) return n.status === 'assigned' || n.status === 'pending_review';
+                                            if (filters.includes('completed')) return n.status === 'completed';
+                                            return true;
+                                        }).map((need) => (
                                             <div
                                                 key={need.id}
                                                 className={`card need-card ${getPriorityClass(need.aiUrgency)}`}
@@ -402,6 +664,20 @@ export default function Dashboard() {
                                                         </div>
                                                         <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>AI Score</div>
                                                     </div>
+                                                    <div style={{ display: 'flex', gap: 10, marginTop: 12, borderTop: '1px solid #f3f4f6', paddingTop: 12 }}>
+                                                        {need.status === 'open' && (
+                                                            <Link to={`/edit-need/${need.id}`} className="btn btn-outline" style={{ fontSize: '0.8rem', padding: '6px 12px' }}>
+                                                                ✏️ Edit
+                                                            </Link>
+                                                        )}
+                                                        <button
+                                                            onClick={() => handleDeleteNeed(need.id)}
+                                                            className="btn"
+                                                            style={{ fontSize: '0.8rem', padding: '6px 12px', background: '#fee2e2', color: '#dc2626', border: '1px solid #fecaca' }}
+                                                        >
+                                                            🗑️ Delete
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         ))
@@ -429,9 +705,7 @@ export default function Dashboard() {
                                 <div className="stat-label">🔄 Assigned</div>
                             </div>
                             <div className="stat-card">
-                                <div className="stat-number" style={{ color: '#f59e0b' }}>
-                                    {needs.filter((n) => n.status === 'pending_review').length}
-                                </div>
+                                <div className="stat-number" style={{ color: '#f59e0b' }}>{stats.pendingReview}</div>
                                 <div className="stat-label">⏳ Pending Review</div>
                             </div>
                             <div className="stat-card">
@@ -467,46 +741,97 @@ export default function Dashboard() {
                             </div>
                         )}
 
-                        <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-                            {['all', 'critical', 'high', 'medium', 'low', 'open', 'assigned', 'pending_review', 'completed'].map((f) => (
+                        {/* Search bar */}
+                        <div style={{ marginBottom: 16 }}>
+                            <input
+                                type="text"
+                                placeholder="🔍 Search by title, description or location..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                style={{
+                                    width: '100%',
+                                    padding: '10px 16px',
+                                    fontSize: '0.95rem',
+                                    border: '1.5px solid #d1d5db',
+                                    borderRadius: '10px',
+                                    outline: 'none',
+                                    boxSizing: 'border-box',
+                                    transition: 'border-color 0.2s',
+                                }}
+                                onFocus={(e) => e.target.style.borderColor = '#1a56db'}
+                                onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                            />
+                        </div>
+
+                        {/* ✅ CHANGED: Multi-select filter buttons */}
+                        <div style={{ display: 'flex', gap: 8, marginBottom: filters.length > 0 ? 8 : 20, flexWrap: 'wrap', alignItems: 'center' }}>
+                            {filterButtons.map(({ key, label }) => (
                                 <button
-                                    key={f}
-                                    onClick={() => setFilter(f)}
+                                    key={key}
+                                    onClick={() => toggleFilter(key)}
                                     className="btn"
                                     style={{
                                         padding: '6px 16px',
                                         fontSize: '0.85rem',
-                                        background: filter === f ? '#1a56db' : 'white',
-                                        color: filter === f ? 'white' : '#374151',
-                                        border: '1.5px solid #d1d5db',
+                                        background: filters.includes(key) ? '#1a56db' : 'white',
+                                        color: filters.includes(key) ? 'white' : '#374151',
+                                        border: filters.includes(key) ? '1.5px solid #1a56db' : '1.5px solid #d1d5db',
                                         borderRadius: '20px',
+                                        fontWeight: filters.includes(key) ? '600' : '400',
+                                        transition: 'all 0.15s',
                                     }}
                                 >
-                                    {f === 'all' && '📋 All'}
-                                    {f === 'critical' && '🔴 Critical'}
-                                    {f === 'high' && '🟡 High'}
-                                    {f === 'medium' && '🔵 Medium'}
-                                    {f === 'low' && '🟢 Low'}
-                                    {f === 'open' && '🔓 Open'}
-                                    {f === 'assigned' && '🔄 Assigned'}
-                                    {f === 'pending_review' && '⏳ Pending Review'}
-                                    {f === 'completed' && '✅ Completed'}
+                                    {label}
                                 </button>
                             ))}
                         </div>
+
+                        {/* ✅ Clear filters button — only shows when something is selected */}
+                        {filters.length > 0 && (
+                            <div style={{ marginBottom: 16 }}>
+                                <button
+                                    onClick={clearFilters}
+                                    style={{
+                                        background: 'none',
+                                        border: 'none',
+                                        color: '#6b7280',
+                                        fontSize: '0.82rem',
+                                        cursor: 'pointer',
+                                        textDecoration: 'underline',
+                                        padding: 0,
+                                    }}
+                                >
+                                    ✕ Clear all filters ({filters.length} active)
+                                </button>
+                            </div>
+                        )}
 
                         {loading ? (
                             <div className="loading-page"><p>Loading needs...</p></div>
                         ) : filteredNeeds.length === 0 ? (
                             <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-                                <div style={{ fontSize: '3rem', marginBottom: 12 }}>📋</div>
-                                <h3>No needs found</h3>
-                                <p style={{ color: '#6b7280', marginTop: 8 }}>No community needs match this filter yet.</p>
+                                <div style={{ fontSize: '3rem', marginBottom: 12 }}>🔍</div>
+                                <h3>No results found</h3>
+                                <p style={{ color: '#6b7280', marginTop: 8 }}>
+                                    {searchQuery ? `No needs match "${searchQuery}"` : 'No community needs match this filter yet.'}
+                                </p>
+                                {(searchQuery || filters.length > 0) && (
+                                    <button
+                                        onClick={() => { setSearchQuery(''); clearFilters(); }}
+                                        className="btn btn-outline"
+                                        style={{ marginTop: 12 }}
+                                    >
+                                        Clear Search & Filters
+                                    </button>
+                                )}
                             </div>
                         ) : (
                             <div>
                                 <p style={{ color: '#6b7280', marginBottom: 16, fontSize: '0.9rem' }}>
-                                    Showing {filteredNeeds.length} need{filteredNeeds.length !== 1 ? 's' : ''} — sorted by AI priority score
+                                    Showing {filteredNeeds.length} need{filteredNeeds.length !== 1 ? 's' : ''}
+                                    {searchQuery && ` matching "${searchQuery}"`}
+                                    {filters.length > 0 && ` · Filters: ${filters.join(', ')}`}
+                                    {' '}— sorted by AI priority score
                                 </p>
                                 {filteredNeeds.map((need) => (
                                     <div

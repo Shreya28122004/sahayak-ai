@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, collection, getDocs, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, updateDoc, addDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
 import { matchVolunteers } from '../services/gemini';
@@ -18,15 +18,21 @@ function getPriorityColor(urgency) {
 
 export default function NeedDetail() {
     const { id } = useParams();
-    const { userProfile } = useAuth();
+    const { currentUser, userProfile } = useAuth();
     const navigate = useNavigate();
     const [need, setNeed] = useState(null);
     const [volunteers, setVolunteers] = useState([]);
     const [matches, setMatches] = useState([]);
     const [loading, setLoading] = useState(true);
     const [matchLoading, setMatchLoading] = useState(false);
+    const [matchError, setMatchError] = useState('');
     const [assigning, setAssigning] = useState(false);
     const [success, setSuccess] = useState('');
+
+    // ✅ NEW: Reject modal state
+    const [showRejectModal, setShowRejectModal] = useState(false);
+    const [rejectReason, setRejectReason] = useState('');
+    const [rejecting, setRejecting] = useState(false);
 
     useEffect(() => {
         async function fetchData() {
@@ -50,28 +56,36 @@ export default function NeedDetail() {
         if (volunteers.length === 0) return;
         setMatchLoading(true);
         setMatches([]);
+        setMatchError('');
         try {
             const volSnap = await getDocs(collection(db, 'volunteers'));
             const freshVolunteers = volSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
             setVolunteers(freshVolunteers);
             const result = await matchVolunteers(need, freshVolunteers);
+
+            // ✅ CHANGED: map volunteer data first, then sort by matchScore descending
             const matchesWithData = result.matches
                 .map((m) => {
-                    // ✅ FIX: subtract 1 because prompt numbers from 1, array starts from 0
                     const volunteer = freshVolunteers[m.volunteerIndex - 1] || freshVolunteers[0];
                     return {
                         ...m,
                         volunteer: volunteer || null,
                     };
                 })
-                .filter((m) => m.volunteer !== null);
+                .filter((m) => m.volunteer !== null)
+                .sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0)); // ✅ Sort highest score first
+
             setMatches(matchesWithData);
         } catch (err) {
             console.error(err);
+            if (err.message && err.message.includes('503')) {
+                setMatchError('⚠️ Gemini AI is temporarily busy. Please wait 30 seconds and try again.');
+            }
         }
         setMatchLoading(false);
     }
 
+    // ✅ CHANGED: now also saves ngoId on the need document
     async function handleAssign(volunteerId, volunteerName) {
         setAssigning(true);
         try {
@@ -80,12 +94,25 @@ export default function NeedDetail() {
                 assignedVolunteerName: volunteerName,
                 status: 'assigned',
                 assignedAt: new Date().toISOString(),
+                ngoId: currentUser.uid,  // ✅ NEW: save NGO's uid so volunteer can notify them later
             });
+
+            // Write notification to volunteer
+            await addDoc(collection(db, 'notifications'), {
+                toUserId: volunteerId,
+                title: '📋 New Task Assigned',
+                message: 'You have been assigned to: ' + need.title,
+                needId: id,
+                read: false,
+                createdAt: new Date().toISOString(),
+            });
+
             setNeed((n) => ({
                 ...n,
                 assignedVolunteer: volunteerId,
                 assignedVolunteerName: volunteerName,
                 status: 'assigned',
+                ngoId: currentUser.uid,
             }));
             setSuccess('✅ ' + volunteerName + ' has been assigned to this need!');
         } catch (err) {
@@ -102,23 +129,50 @@ export default function NeedDetail() {
             });
             setNeed((n) => ({ ...n, status: 'completed' }));
             setSuccess('✅ Need marked as completed! Impact has been tracked.');
+            setShowRejectModal(false);
         } catch (err) {
             console.error(err);
         }
     }
 
-    async function handleReject() {
+    // ✅ CHANGED: opens modal instead of immediately rejecting
+    function handleRejectClick() {
+        setRejectReason('');
+        setShowRejectModal(true);
+    }
+
+    // ✅ NEW: Confirm reject — updates Firestore + notifies volunteer
+    async function handleRejectConfirm() {
+        if (!rejectReason.trim()) return;
+        setRejecting(true);
         try {
             await updateDoc(doc(db, 'needs', id), {
                 status: 'assigned',
                 rejectedAt: new Date().toISOString(),
                 completedByVolunteer: false,
+                completionNote: '',  // clear old note so volunteer can write a new one
             });
-            setNeed((n) => ({ ...n, status: 'assigned', completedByVolunteer: false }));
-            setSuccess('⚠️ Task sent back to volunteer for re-completion.');
+
+            // ✅ Notify volunteer with rejection reason
+            if (need.assignedVolunteer) {
+                await addDoc(collection(db, 'notifications'), {
+                    toUserId: need.assignedVolunteer,
+                    title: '❌ Task Rejected',
+                    message: `Your submission for "${need.title}" was rejected. Reason: ${rejectReason.trim()}`,
+                    needId: id,
+                    read: false,
+                    createdAt: new Date().toISOString(),
+                });
+            }
+
+            setNeed((n) => ({ ...n, status: 'assigned', completedByVolunteer: false, completionNote: '' }));
+            setSuccess('⚠️ Task sent back to volunteer. Rejection reason sent via notification.');
+            setShowRejectModal(false);
+            setRejectReason('');
         } catch (err) {
             console.error(err);
         }
+        setRejecting(false);
     }
 
     if (loading) {
@@ -233,7 +287,7 @@ export default function NeedDetail() {
                         {need.createdAt ? new Date(need.createdAt).toLocaleDateString() : ''}
                     </p>
 
-                    {/* Approve / Reject Buttons */}
+                    {/* ✅ Approve / Reject section — now shows completion note */}
                     {userProfile?.role === 'ngo' && need.status === 'pending_review' && (
                         <div style={{
                             background: '#fef3c7',
@@ -245,6 +299,44 @@ export default function NeedDetail() {
                             <div style={{ fontWeight: '700', color: '#92400e', marginBottom: 8 }}>
                                 ⏳ Volunteer has submitted this task for review
                             </div>
+
+                            {/* ✅ Show volunteer's completion note + proof photo */}
+                            {need.completionNote && (
+                                <div style={{
+                                    background: 'white',
+                                    border: '1px solid #fcd34d',
+                                    borderRadius: 8,
+                                    padding: '12px 14px',
+                                    marginBottom: 14,
+                                }}>
+                                    <div style={{ fontSize: '0.82rem', fontWeight: '700', color: '#92400e', marginBottom: 6 }}>
+                                        📝 Volunteer's Completion Note:
+                                    </div>
+                                    <p style={{ fontSize: '0.9rem', color: '#78350f', lineHeight: 1.6 }}>
+                                        {need.completionNote}
+                                    </p>
+                                    {/* ✅ NEW: Proof photo */}
+                                    {need.completionPhoto && (
+                                        <div style={{ marginTop: 12 }}>
+                                            <div style={{ fontSize: '0.82rem', fontWeight: '700', color: '#92400e', marginBottom: 6 }}>
+                                                📸 Proof Photo:
+                                            </div>
+                                            <img
+                                                src={need.completionPhoto}
+                                                alt="Volunteer proof"
+                                                style={{
+                                                    width: '100%',
+                                                    maxWidth: 360,
+                                                    borderRadius: 8,
+                                                    border: '1px solid #fcd34d',
+                                                    display: 'block',
+                                                }}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             <p style={{ fontSize: '0.9rem', color: '#92400e', marginBottom: 12 }}>
                                 Please verify the work was completed before approving.
                             </p>
@@ -252,7 +344,8 @@ export default function NeedDetail() {
                                 <button onClick={handleComplete} className="btn btn-success">
                                     ✅ Approve & Mark Complete
                                 </button>
-                                <button onClick={handleReject} className="btn btn-danger">
+                                {/* ✅ CHANGED: opens modal instead of directly rejecting */}
+                                <button onClick={handleRejectClick} className="btn btn-danger">
                                     ❌ Reject — Send Back
                                 </button>
                             </div>
@@ -288,6 +381,12 @@ export default function NeedDetail() {
                             )}
                         </button>
 
+                        {matchError && (
+                            <div className="alert alert-warning" style={{ marginTop: 12 }}>
+                                {matchError}
+                            </div>
+                        )}
+
                         {volunteers.length === 0 && (
                             <div className="alert alert-info" style={{ marginTop: 12 }}>
                                 No volunteers registered yet. Ask volunteers to sign up!
@@ -303,6 +402,7 @@ export default function NeedDetail() {
                                         key={index}
                                         style={{
                                             border: '1.5px solid',
+                                            // ✅ CHANGED: index 0 is now guaranteed to be highest score
                                             borderColor: index === 0 ? '#86efac' : '#e5e7eb',
                                             borderRadius: 10,
                                             padding: 16,
@@ -310,6 +410,7 @@ export default function NeedDetail() {
                                             background: index === 0 ? '#f0fdf4' : 'white',
                                         }}
                                     >
+                                        {/* ✅ CHANGED: Best Match always goes to index 0 (sorted highest score) */}
                                         {index === 0 && (
                                             <div style={{
                                                 fontSize: '0.75rem',
@@ -380,6 +481,83 @@ export default function NeedDetail() {
                     </div>
                 )}
             </div>
+
+            {/* ✅ NEW: Reject Reason Modal */}
+            {showRejectModal && (
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000,
+                    padding: 20,
+                }}>
+                    <div style={{
+                        background: 'white',
+                        borderRadius: 16,
+                        padding: 28,
+                        width: '100%',
+                        maxWidth: 480,
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+                    }}>
+                        <h3 style={{ fontSize: '1.2rem', marginBottom: 8, color: '#1a202c' }}>
+                            ❌ Reject & Send Back
+                        </h3>
+                        <p style={{ color: '#6b7280', fontSize: '0.9rem', marginBottom: 16 }}>
+                            The volunteer will be notified with your reason and can resubmit the task.
+                        </p>
+
+                        <label style={{ fontSize: '0.85rem', fontWeight: '600', color: '#374151', display: 'block', marginBottom: 6 }}>
+                            Reason for rejection <span style={{ color: '#ef4444' }}>*</span>
+                        </label>
+                        <textarea
+                            rows={4}
+                            placeholder="e.g. The task is incomplete — please distribute to 50 more families and resubmit."
+                            value={rejectReason}
+                            onChange={(e) => setRejectReason(e.target.value)}
+                            style={{
+                                width: '100%',
+                                padding: '10px 12px',
+                                fontSize: '0.9rem',
+                                border: '1.5px solid #d1d5db',
+                                borderRadius: '8px',
+                                resize: 'vertical',
+                                outline: 'none',
+                                boxSizing: 'border-box',
+                                fontFamily: 'inherit',
+                                color: '#374151',
+                                marginBottom: 16,
+                            }}
+                            onFocus={(e) => e.target.style.borderColor = '#ef4444'}
+                            onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                            autoFocus
+                        />
+
+                        <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+                            <button
+                                onClick={() => { setShowRejectModal(false); setRejectReason(''); }}
+                                className="btn btn-outline"
+                                disabled={rejecting}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleRejectConfirm}
+                                className="btn btn-danger"
+                                disabled={!rejectReason.trim() || rejecting}
+                            >
+                                {rejecting ? (
+                                    <><span className="spinner"></span> Rejecting...</>
+                                ) : (
+                                    '❌ Confirm Reject'
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
