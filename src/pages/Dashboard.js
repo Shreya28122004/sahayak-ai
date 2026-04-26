@@ -664,6 +664,10 @@ export default function Dashboard() {
                                                         </div>
                                                         <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>AI Score</div>
                                                     </div>
+                                                </div> {/* closes the flex row div */}
+
+                                                {/* Edit + Delete — only for this user's own needs */}
+                                                {need.submittedBy === currentUser?.uid && (
                                                     <div style={{ display: 'flex', gap: 10, marginTop: 12, borderTop: '1px solid #f3f4f6', paddingTop: 12 }}>
                                                         {need.status === 'open' && (
                                                             <Link to={`/edit-need/${need.id}`} className="btn btn-outline" style={{ fontSize: '0.8rem', padding: '6px 12px' }}>
@@ -678,8 +682,9 @@ export default function Dashboard() {
                                                             🗑️ Delete
                                                         </button>
                                                     </div>
-                                                </div>
+                                                )}
                                             </div>
+
                                         ))
                                     )}
                                 </>
@@ -913,6 +918,6 @@ export default function Dashboard() {
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }
